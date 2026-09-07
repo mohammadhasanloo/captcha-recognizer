@@ -1,57 +1,134 @@
-# Captcha Recognition Neural Network
+# Captcha Recognizer
 
-## Description
+A convolutional neural network that reads five-character captcha images. A single
+convolutional trunk encodes the whole 200x50 image and five independent softmax
+heads each predict one character position, so the network learns where characters
+sit rather than being told.
 
-This repository contains a neural network model for recognizing captchas. It includes a collection of captchas in the [samples] folder, and the neural network model is used to predict the characters present in new captchas. For more detailed information, please refer to the [Report.html] file.
+![Held-out captchas and the model's reading](docs/demo.png)
+
+## Requirements
+
+Python 3.10 or later.
 
 ## Installation
 
-To run this project, follow the steps below:
-
-1. Clone the repository to your local machine.
-
-2. Open the command prompt (cmd) in the folder of the project.
-
-3. Run the following command to execute the Captcha Recognition script:
-
-```
-python Captcha_Recognization.py
+```bash
+pip install -r requirements.txt
 ```
 
-During the running process, you will see a converted sample figure after preprocessing. After that, some information will be printed, and the data will be fitted (estimated 2-3 minutes). Finally, a file named [result.csv] will be created, which shows the predicted values and true values in CSV format for the test data.
+For the test suite as well:
 
-## AI Medic Internship - Second Project
+```bash
+pip install -r requirements-dev.txt
+```
 
-This project implements a neural network for captcha recognition using Python and TensorFlow. The model is designed using object-oriented programming to improve modularity and maintainability.
+## Usage
 
-## Import Necessary Libraries
+Train, evaluate on the held-out split, and write all figures and results:
 
-The necessary libraries are imported to perform image processing, neural network modeling, and visualization. The libraries include cv2, os, numpy, pandas, tensorflow, and matplotlib.
+```bash
+python -m captcha_recognizer.cli train
+```
 
-## Load Images from Folder and Convert Images to Grayscale Form
+Training takes about a minute on a laptop CPU.
 
-The images are loaded from the specified folder, and preprocessing operations are applied to the data. The function `delete_noisy_line()` is used to delete noise lines from the images. The images are then converted to grayscale and stored along with their labels and unique characters.
+Score an already-trained model:
 
-## Preprocess Data
+```bash
+python -m captcha_recognizer.cli evaluate
+```
 
-The loaded images and labels are preprocessed to convert them to the proper shape for training the neural network. The data is divided into X (input images) and y (target labels). The characters in the labels are converted to one-hot encoded vectors to be used as target values for the model.
+Read specific images:
 
-## Design an Object-Oriented Network
+```bash
+python -m captcha_recognizer.cli predict samples/226md.png samples/22d5n.png
+```
 
-An object-oriented neural network model is designed using the TensorFlow Keras API. The model consists of five Conv2D layers, each followed by a MaxPool2D layer. It is then followed by a Flatten, Dropout, and BatchNormalization layers. The model is designed to predict each character of the captcha separately. Each character prediction is represented by a separate sequential part of the model.
+All three accept `--samples`, `--model`, `--docs`, `--results` and `--seed`;
+`train` also takes `--epochs` and `--batch-size`.
 
-## Fiting Data
+## Results
 
-The model is compiled using the Adam optimizer and categorical cross-entropy loss function. The data is split into training and testing sets (80% for training and 20% for testing). The model is trained for 30 epochs using a batch size of 32.
+1,070 labelled captchas split 856 train / 214 held out, 30 epochs, seed 0.
 
-## Evaluation
+| position | accuracy |
+| --- | --- |
+| character 1 | 96.3% |
+| character 2 | 93.5% |
+| character 3 | 91.1% |
+| character 4 | 88.3% |
+| character 5 | 97.7% |
+| mean per character | 93.4% |
 
-The model is evaluated on the test data, and the accuracy of predicting each character is printed. The accuracy achieved on each character is more than 94%.
+Written to `results/` on every run:
 
-## See Predictions
+| file | contents |
+| --- | --- |
+| `results/metrics.json` | per-character, mean and whole-captcha accuracy |
+| `results/predictions.csv` | every held-out prediction beside its ground truth |
 
-The model's predictions and true values are obtained for the test data. The predicted values are converted to a dataframe, and a CSV file named "result.csv" is created to show the predictions.
+Figures land in `docs/`: `demo.png` is the prediction grid above, and
+`training_curve.png` plots training against validation loss.
 
-## Note
+## How it works
 
-Please make sure to have all the necessary dependencies installed before running the script.
+**Preprocessing.** The generator draws a stroke through each captcha. `denoise()`
+blurs to soften that one-pixel line, thresholds to black and white, then dilates
+vertically and erodes to reconnect the character strokes it crosses.
+
+**Architecture.** Five `Conv2D` + `MaxPool2D` blocks (16, 32, 64, 128, 256
+filters), then flatten, dropout and batch normalisation. That shared
+representation feeds five heads, each `Dense(64)` → dropout → batch norm →
+`Dense(19, softmax)`. The vocabulary is the 19 symbols the generator uses:
+`2345678bcdefgmnpwxy`.
+
+**Training.** Adam at 1e-3, sparse categorical cross-entropy summed across the
+five heads, batch size 32, 30 epochs.
+
+## Project structure
+
+```
+captcha_recognizer/
+    data.py       loading, denoising, vocabulary, train/test split
+    model.py      the trunk-and-five-heads network
+    train.py      training run, writes model, figures and results
+    evaluate.py   per-character and whole-captcha scoring
+    demo.py       figure and results-file generation
+    cli.py        train / evaluate / predict
+tests/            preprocessing and split tests
+samples/          1,070 captchas; each filename is its ground truth
+docs/             figures referenced by this README
+results/          metrics and predictions from the most recent run
+```
+
+## Components
+
+| module | responsibility |
+| --- | --- |
+| `data` | Reads and denoises images, builds the character vocabulary, encodes labels, splits the dataset |
+| `model` | Builds and compiles the network |
+| `train` | Orchestrates a run and writes every artefact |
+| `evaluate` | Batched prediction and accuracy scoring |
+| `demo` | Renders figures and writes the results files |
+| `cli` | Argument parsing and command dispatch |
+
+## Testing
+
+```bash
+python -m pytest tests/
+```
+
+Eleven tests covering vocabulary stability, denoising, dataset reproducibility
+and the train/test split.
+
+## Notes
+
+The trained model is not committed. It is 18 MB and takes about a minute to
+rebuild, so `train` regenerates it rather than the repository storing it.
+
+The network overfits: training loss approaches zero while validation loss
+plateaus around 1.2, visible in `docs/training_curve.png`. Position 4 is
+consistently the weakest head. Everything here is trained and measured on a
+single captcha generator at a fixed length of five characters; a different font,
+length or character set requires retraining.
